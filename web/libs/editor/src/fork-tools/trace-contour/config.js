@@ -5,7 +5,7 @@
  * or from any script that runs before the editor starts:
  *
  *   window.LS_FORK_TOOLS = { traceContour: { enabled: false } };   // switch the tool off
- *   window.LS_FORK_TOOLS = { traceContour: { gapPx: 3 } };         // gap of 3 px of the original image
+ *   window.LS_FORK_TOOLS = { traceContour: { gapPx: 2 } };         // gap of 2 px of the original image
  *
  * The values are read on every use, so a change made in the console takes effect immediately.
  */
@@ -22,6 +22,8 @@ export const TRACE_CONTOUR_DEFAULTS = {
   pickRadiusScreenPx: 12,
   // A press-release that moved by more than this many screen pixels is a drag, not a click.
   clickMovePx: 5,
+  // Insert the traced points into the polygon. false = a dry run: everything works, the result only goes to the console.
+  apply: true,
   // Draw the neighbour's vertices and the arc preview over the image. false = clicks and hotkeys only.
   showOverlay: true,
   // Write what the tool is doing to the browser console (prefix "[trace-contour]").

@@ -52,7 +52,18 @@ const makeFakeTool = () => {
     internalToCanvasX: (n) => (n / 100) * STAGE,
     internalToCanvasY: (n) => (n / 100) * STAGE,
   };
-  const drawing = { type: "polygonregion", id: "drawing", closed: false, parent: obj, points: [{ x: 1, y: 1 }] };
+  // The polygon being drawn. `insertPoint` mimics the real one: canvas coordinates in, percent stored.
+  const drawing = {
+    type: "polygonregion",
+    id: "drawing",
+    closed: false,
+    parent: obj,
+    points: [{ x: 1, y: 1 }],
+    insertPoint: jest.fn((index, canvasX, canvasY) => {
+      drawing.points.splice(index, 0, { x: obj.canvasToInternalX(canvasX), y: obj.canvasToInternalY(canvasY) });
+    }),
+  };
+  const history = { freeze: jest.fn(), unfreeze: jest.fn() };
   const neighbour = {
     type: "polygonregion",
     id: "neighbour",
@@ -67,7 +78,7 @@ const makeFakeTool = () => {
       isDrawing: true,
       getActivePolygon: drawing,
       obj,
-      annotation: { isReadOnly: () => false, regions: [drawing, neighbour] },
+      annotation: { isReadOnly: () => false, regions: [drawing, neighbour], history },
     }))
     .actions((self) => ({
       setDrawing(value) {
@@ -76,7 +87,7 @@ const makeFakeTool = () => {
     }));
   const tool = types.compose("Tool", Fake, TraceMixin).create({});
 
-  return { tool, container, canvas };
+  return { tool, container, canvas, drawing, history, obj };
 };
 
 const key = (init, target = document.body) => {
@@ -267,6 +278,125 @@ describe("TraceMixin", () => {
     destroy(fake.tool);
     expect(key({ code: "Comma", key: "," }).defaultPrevented).toBe(false);
     fake.tool = makeFakeTool().tool; // afterEach destroys it
+  });
+
+  describe("inserting the arc", () => {
+    // The gap is fixed here, so these tests do not change when the default in config.js is tuned.
+    beforeEach(() => {
+      window.LS_FORK_TOOLS = { traceContour: { gapPx: 1 } };
+    });
+
+    // vertices #0 (20%,20%) and #1 (40%,20%) of the neighbour; a gap of 1 px pushes them out by 1 px of 1000
+    const traceFirstEdge = () => {
+      key({ code: "Comma", key: "," });
+      click(fake.canvas, 150, 150);
+      click(fake.canvas, 101, 100);
+      click(fake.canvas, 201, 99);
+    };
+
+    test("the traced points are appended after the existing ones, shifted outwards by the gap", () => {
+      traceFirstEdge();
+
+      expect(fake.drawing.points).toHaveLength(3);
+      expect(fake.drawing.points[0]).toEqual({ x: 1, y: 1 }); // the user's own point is untouched
+      expect(fake.drawing.points[1].x).toBeCloseTo(19.9, 6); // 200 px - 1 px = 199 px of 1000
+      expect(fake.drawing.points[1].y).toBeCloseTo(19.9, 6);
+      expect(fake.drawing.points[2].x).toBeCloseTo(40.1, 6);
+      expect(fake.drawing.points[2].y).toBeCloseTo(19.9, 6);
+    });
+
+    test("points go in at the end of the list, through insertPoint (never through addPoint, which can close the polygon)", () => {
+      traceFirstEdge();
+
+      expect(fake.drawing.insertPoint.mock.calls.map(([index]) => index)).toEqual([1, 2]);
+      // percent -> canvas: 19.9% of a 500 px stage is 99.5 px
+      expect(fake.drawing.insertPoint.mock.calls[0][1]).toBeCloseTo(99.5, 6);
+    });
+
+    test("the whole arc is ONE undo step: the history is frozen around the insertion and released once", () => {
+      const order = [];
+
+      fake.history.freeze.mockImplementation(() => order.push("freeze"));
+      fake.history.unfreeze.mockImplementation(() => order.push("unfreeze"));
+      fake.drawing.insertPoint.mockImplementation((index, x, y) => {
+        order.push("insert");
+        fake.drawing.points.splice(index, 0, { x, y });
+      });
+      traceFirstEdge();
+
+      expect(order).toEqual(["freeze", "insert", "insert", "unfreeze"]);
+      expect(fake.history.freeze.mock.calls[0]).toEqual(fake.history.unfreeze.mock.calls[0]); // the same lock key
+    });
+
+    test("the history is released even if inserting fails", () => {
+      // an error inside a DOM listener does not reach the caller; it goes to window "error" (we just catch it here)
+      const errors = [];
+      const onError = (ev) => {
+        errors.push(ev.error?.message);
+        ev.preventDefault();
+      };
+
+      window.addEventListener("error", onError);
+      fake.drawing.insertPoint.mockImplementation(() => {
+        throw new Error("boom");
+      });
+      traceFirstEdge();
+      window.removeEventListener("error", onError);
+
+      expect(errors).toEqual(["boom"]);
+      expect(fake.history.freeze).toHaveBeenCalledTimes(1);
+      expect(fake.history.unfreeze).toHaveBeenCalledTimes(1);
+    });
+
+    test("the long arc inserts the other way round", () => {
+      key({ code: "Period", key: "." });
+      click(fake.canvas, 150, 150);
+      click(fake.canvas, 101, 100);
+      click(fake.canvas, 201, 99);
+
+      expect(fake.drawing.points).toHaveLength(1 + 4); // #0, #3, #2, #1
+    });
+
+    test("a point that lands on the previous one is skipped by insertPoint and is not counted", () => {
+      let calls = 0;
+
+      fake.drawing.insertPoint.mockImplementation((index, x, y) => {
+        calls++;
+        if (calls === 1) return; // the real insertPoint refuses a duplicate of the previous point
+        fake.drawing.points.splice(index, 0, { x, y });
+      });
+      traceFirstEdge();
+      expect(logged()).toContain("inserted 1 of 2 points");
+    });
+
+    test("the log says how many points were inserted", () => {
+      traceFirstEdge();
+      expect(logged()).toContain("inserted 2 of 2 points");
+    });
+
+    test("apply: false is a dry run: no history lock, no points", () => {
+      window.LS_FORK_TOOLS = { traceContour: { apply: false, gapPx: 1 } };
+      traceFirstEdge();
+
+      expect(fake.drawing.points).toHaveLength(1);
+      expect(fake.history.freeze).not.toHaveBeenCalled();
+      expect(logged()).toContain("apply is off");
+    });
+
+    test("nothing is inserted into a polygon of another image", () => {
+      fake.obj.multiImage = true;
+      fake.obj.currentImage = 1;
+      fake.drawing.item_index = 0;
+      traceFirstEdge();
+
+      expect(fake.drawing.points).toHaveLength(1);
+    });
+
+    test("the tool can be used again right after an insertion", () => {
+      traceFirstEdge();
+      key({ code: "Comma", key: "," });
+      expect(logged()).toMatch(/started, arc: SHORT[\s\S]*started, arc: SHORT/);
+    });
   });
 
   describe("overlay", () => {

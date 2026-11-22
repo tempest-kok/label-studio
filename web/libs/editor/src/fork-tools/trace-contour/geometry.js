@@ -12,7 +12,7 @@
  *    (the first point is NOT repeated at the end).
  */
 
-export const DEFAULT_GAP_PX = 2;
+export const DEFAULT_GAP_PX = 0.7;
 export const DEFAULT_MITER_LIMIT = 4;
 export const PATH_MODE = { SHORT: "short", LONG: "long" };
 

@@ -1,12 +1,14 @@
 /**
  * Trace-contour: glue between the pure flow (flow.js) and Label Studio's Polygon tool.
  *
- * What it does (the result is still only written to the console, the points are not inserted yet):
+ * What it does:
  *  - `,` starts the flow with the SHORT arc, `.` starts it with the LONG arc (inside the flow the keys switch the arc);
  *  - while the flow is active, left clicks on the image are taken over before Konva sees them, so the neighbour
  *    polygon is not selected and not dragged, and the polygon being drawn gets no extra points;
  *  - three clicks: neighbour polygon, start vertex, end vertex;  Esc cancels;
- *  - while the flow is active the overlay (TraceOverlay.js) shows the neighbour's vertices and the arc preview.
+ *  - while the flow is active the overlay (TraceOverlay.js) shows the neighbour's vertices and the arc preview;
+ *  - after the third click the points of the arc are appended to the polygon being drawn, as ordinary polygon points,
+ *    in ONE undo step (Ctrl+Z removes the whole arc).
  *
  * The mixin is added to the Polygon tool with one line in tools/Polygon.js (see FORK_TOUCHPOINTS.md).
  */
@@ -19,6 +21,7 @@ import { PATH_MODE } from "./geometry";
 import { createOverlay } from "./TraceOverlay";
 
 const LOG = "[trace-contour]";
+const HISTORY_KEY = "fork:trace-contour"; // the lock name used to merge the inserted points into one undo step
 // Everything that makes up a mouse click. Konva listens to both the mouse and the pointer variants.
 const SWALLOWED_MOUSE_EVENTS = ["mousedown", "mouseup", "pointerdown", "pointerup", "click", "dblclick"];
 
@@ -94,6 +97,37 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
     return getTraceConfig().pickRadiusScreenPx / screenPxPerImagePx;
   };
 
+  /**
+   * Appends the points to the polygon being drawn and returns how many were really added.
+   *
+   * - `insertPoint` is used instead of `addPoint`: `addPoint` closes the polygon when a point lands on the first one,
+   *   which must never happen in the middle of an arc.
+   * - The history is frozen while the points go in, so the whole arc becomes one undo step.
+   */
+  const insertPoints = (points) => {
+    const area = self.getActivePolygon;
+    const obj = self.obj;
+
+    if (!area || !points.length) return 0;
+    if (obj.multiImage && area.item_index !== obj.currentImage) return 0;
+
+    const history = self.annotation.history;
+    let inserted = 0;
+
+    history.freeze(HISTORY_KEY);
+    try {
+      for (const [x, y] of points) {
+        const before = area.points.length;
+
+        area.insertPoint(before, obj.internalToCanvasX(x), obj.internalToCanvasY(y));
+        if (area.points.length > before) inserted++;
+      }
+    } finally {
+      history.unfreeze(HISTORY_KEY);
+    }
+    return inserted;
+  };
+
   /** Redraw the overlay from the current flow state and the last known mouse position. */
   const refresh = () => {
     if (!flow.active || !getTraceConfig().showOverlay) {
@@ -159,11 +193,18 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
         break;
       case "done":
         log(
-          `click 3 ok: polygon ${event.polygonId}, vertices #${event.from} -> #${event.to}, arc ${event.mode}. ` +
-            `Would insert ${event.points.length} points (indices ${event.indices.join(", ")}):`,
+          `click 3 ok: polygon ${event.polygonId}, vertices #${event.from} -> #${event.to}, arc ${event.mode}, ` +
+            `${event.points.length} points (indices ${event.indices.join(", ")})`,
         );
         // percent of the image, the same units Label Studio uses in the result JSON
         if (getTraceConfig().debug) console.table(event.points.map(([x, y], i) => ({ vertex: event.indices[i], x, y })));
+        if (getTraceConfig().apply) {
+          const inserted = insertPoints(event.points);
+
+          log(`inserted ${inserted} of ${event.points.length} points into the polygon (Ctrl+Z removes them all)`);
+        } else {
+          log("apply is off: nothing inserted");
+        }
         break;
       default:
     }
