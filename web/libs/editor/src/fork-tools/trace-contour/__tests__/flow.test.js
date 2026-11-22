@@ -153,3 +153,85 @@ describe("trace flow: result", () => {
     expect(flow.press(PATH_MODE.LONG).type).toBe("started");
   });
 });
+
+describe("trace flow: preview (what the overlay shows)", () => {
+  const view = (flow, point, extra = {}) => flow.preview({ ...base, point, ...extra });
+
+  test("nothing to show while idle", () => {
+    expect(view(createTraceFlow(), [30, 30])).toBeNull();
+  });
+
+  test("before click 1 the polygon under the cursor is shown, nothing outside", () => {
+    const flow = createTraceFlow();
+
+    flow.press(PATH_MODE.SHORT);
+    expect(view(flow, [30, 30]).vertices).toEqual(neighbour.points);
+    expect(view(flow, [70, 70], { polygons: [neighbour] }).vertices).toBeNull();
+    expect(view(flow, null).vertices).toBeNull();
+  });
+
+  test("before click 1 the smallest polygon under the cursor is shown", () => {
+    const flow = createTraceFlow();
+
+    flow.press(PATH_MODE.SHORT);
+    expect(view(flow, [30, 30]).vertices).toEqual(neighbour.points);
+    expect(view(flow, [70, 70]).vertices).toEqual(big.points);
+  });
+
+  test("after click 1 the picked polygon stays shown and the vertex under the cursor is marked", () => {
+    const flow = createTraceFlow();
+
+    flow.press(PATH_MODE.SHORT);
+    click(flow, [30, 30]);
+
+    expect(view(flow, [70, 70]).vertices).toEqual(neighbour.points); // cursor left the polygon, it stays
+    expect(view(flow, [70, 70]).hoverIndex).toBeNull();
+    expect(view(flow, [40.1, 40.1]).hoverIndex).toBe(2);
+    expect(view(flow, [40.1, 40.1]).arcs).toBeNull(); // no start vertex yet
+  });
+
+  test("after click 2 the start vertex is reported", () => {
+    const flow = toPickEnd();
+
+    expect(view(flow, null).startIndex).toBe(0);
+  });
+
+  test("in the last stage both arcs are previewed, the chosen one follows the mode", () => {
+    const flow = toPickEnd(PATH_MODE.SHORT);
+    const short = view(flow, [40.2, 19.8]);
+
+    expect(short.hoverIndex).toBe(1);
+    expect(short.arcs.chosen).toHaveLength(2);
+    expect(short.arcs.other).toHaveLength(4);
+
+    flow.press(PATH_MODE.LONG);
+    const long = view(flow, [40.2, 19.8]);
+
+    expect(long.arcs.chosen).toHaveLength(4);
+    expect(long.arcs.other).toHaveLength(2);
+    expect(long.arcs.chosen).toEqual(short.arcs.other);
+  });
+
+  test("the preview is exactly what the third click would insert", () => {
+    const flow = toPickEnd(PATH_MODE.LONG);
+    const preview = view(flow, [40.2, 19.8]).arcs.chosen;
+
+    expect(click(flow, [40.2, 19.8]).points).toEqual(preview);
+  });
+
+  test("hovering the start vertex itself gives no arcs", () => {
+    const flow = toPickEnd();
+    const hover = view(flow, [20.1, 20.1]);
+
+    expect(hover.hoverIndex).toBe(0);
+    expect(hover.arcs).toBeNull();
+  });
+
+  test("preview does not change the flow state", () => {
+    const flow = toPickEnd();
+
+    view(flow, [40.2, 19.8]);
+    expect(flow.stage).toBe(STAGE.PICK_END);
+    expect(flow.startIndex).toBe(0);
+  });
+});

@@ -20,6 +20,23 @@ export const STAGE = {
   PICK_END: "pickEnd",
 };
 
+/** The smallest closed polygon that contains the point (so a polygon lying inside another one can still be picked). */
+function polygonAt(polygons, pointPx, width, height) {
+  let best = null;
+
+  for (const polygon of polygons) {
+    const ring = toPixels(polygon.points, width, height);
+
+    if (ring.length < 3 || !pointInPolygon(pointPx, ring)) continue;
+    const area = polygonArea(ring);
+
+    if (!best || area < best.area) best = { polygon, area };
+  }
+  return best?.polygon ?? null;
+}
+
+const otherMode = (mode) => (mode === PATH_MODE.SHORT ? PATH_MODE.LONG : PATH_MODE.SHORT);
+
 export function createTraceFlow() {
   let stage = STAGE.IDLE;
   let mode = PATH_MODE.SHORT;
@@ -71,6 +88,50 @@ export function createTraceFlow() {
     },
 
     /**
+     * What the overlay should show right now. Pure: it only reads the flow state and its arguments.
+     *
+     * @param {Object} params the same as in `click`, except that `point` may be null (the cursor is outside the image)
+     * @returns {null | {
+     *   stage: string, mode: string,
+     *   vertices: number[][] | null,   // outline and vertex markers of the polygon being traced, percent
+     *   startIndex: number | null,     // vertex `a`, once it is picked
+     *   hoverIndex: number | null,     // vertex under the cursor
+     *   arcs: { chosen: number[][], other: number[][] } | null  // points that would be inserted, percent
+     * }}
+     */
+    preview({ point, polygons, width, height, pickRadiusImagePx, gapPx, miterLimit }) {
+      if (stage === STAGE.IDLE) return null;
+
+      const view = { stage, mode, vertices: null, startIndex, hoverIndex: null, arcs: null };
+      const pointPx = point ? toPixels([point], width, height)[0] : null;
+
+      if (stage === STAGE.PICK_POLYGON) {
+        const polygon = pointPx ? polygonAt(polygons, pointPx, width, height) : null;
+
+        view.vertices = polygon ? polygon.points : null;
+        return view;
+      }
+
+      view.vertices = picked.points;
+      if (!pointPx) return view;
+
+      const vertex = nearestVertex(toPixels(picked.points, width, height), pointPx, pickRadiusImagePx);
+
+      if (!vertex) return view;
+      view.hoverIndex = vertex.index;
+
+      if (stage === STAGE.PICK_END && vertex.index !== startIndex) {
+        const trace = (m) =>
+          traceContour({ ring: picked.points, width, height, from: startIndex, to: vertex.index, mode: m, gapPx, miterLimit });
+        const chosen = trace(mode);
+        const other = trace(otherMode(mode));
+
+        if (chosen) view.arcs = { chosen: chosen.points, other: other ? other.points : [] };
+      }
+      return view;
+    },
+
+    /**
      * @param {Object} params
      * @param {number[]} params.point click position, percent
      * @param {{id: string, points: number[][]}[]} params.polygons closed polygons that can be traced, points in percent
@@ -86,19 +147,11 @@ export function createTraceFlow() {
       const clickPx = toPixels([point], width, height)[0];
 
       if (stage === STAGE.PICK_POLYGON) {
-        let best = null;
+        const polygon = polygonAt(polygons, clickPx, width, height);
 
-        for (const polygon of polygons) {
-          const ring = toPixels(polygon.points, width, height);
+        if (!polygon) return { type: "miss", reason: "no-polygon" };
 
-          if (ring.length < 3 || !pointInPolygon(clickPx, ring)) continue;
-          const area = polygonArea(ring);
-
-          if (!best || area < best.area) best = { polygon, area };
-        }
-        if (!best) return { type: "miss", reason: "no-polygon" };
-
-        picked = { id: best.polygon.id, points: best.polygon.points };
+        picked = { id: polygon.id, points: polygon.points };
         stage = STAGE.PICK_START;
         return { type: "polygon-picked", id: picked.id, vertexCount: picked.points.length };
       }

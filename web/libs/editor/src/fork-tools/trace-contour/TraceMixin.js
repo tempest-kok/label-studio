@@ -1,11 +1,12 @@
 /**
  * Trace-contour: glue between the pure flow (flow.js) and Label Studio's Polygon tool.
  *
- * What it does, step 2 (no drawing yet, the result is only written to the console):
+ * What it does (the result is still only written to the console, the points are not inserted yet):
  *  - `,` starts the flow with the SHORT arc, `.` starts it with the LONG arc (inside the flow the keys switch the arc);
  *  - while the flow is active, left clicks on the image are taken over before Konva sees them, so the neighbour
  *    polygon is not selected and not dragged, and the polygon being drawn gets no extra points;
- *  - three clicks: neighbour polygon, start vertex, end vertex;  Esc cancels.
+ *  - three clicks: neighbour polygon, start vertex, end vertex;  Esc cancels;
+ *  - while the flow is active the overlay (TraceOverlay.js) shows the neighbour's vertices and the arc preview.
  *
  * The mixin is added to the Polygon tool with one line in tools/Polygon.js (see FORK_TOUCHPOINTS.md).
  */
@@ -15,6 +16,7 @@ import { FF_DEV_3793, isFF } from "../../utils/feature-flags";
 import { getTraceConfig } from "./config";
 import { createTraceFlow } from "./flow";
 import { PATH_MODE } from "./geometry";
+import { createOverlay } from "./TraceOverlay";
 
 const LOG = "[trace-contour]";
 // Everything that makes up a mouse click. Konva listens to both the mouse and the pointer variants.
@@ -25,7 +27,10 @@ const isTypingTarget = (el) =>
 
 export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
   const flow = createTraceFlow();
+  const overlay = createOverlay();
   let pressedAt = null; // where the left button went down, client coordinates
+  let lastPointer = null; // last known mouse position: { x, y, target } in client coordinates
+  let frame = null; // requestAnimationFrame id of a scheduled overlay refresh
 
   const log = (...args) => {
     if (getTraceConfig().debug) console.info(LOG, ...args);
@@ -51,6 +56,7 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
     const event = flow.cancel();
 
     pressedAt = null;
+    overlay.clear();
     if (event.wasActive) log(reason ? `cancelled: ${reason}` : "cancelled");
   };
 
@@ -86,6 +92,43 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
     const screenPxPerImagePx = (obj.stageWidth * obj.zoomScale) / obj.naturalWidth;
 
     return getTraceConfig().pickRadiusScreenPx / screenPxPerImagePx;
+  };
+
+  /** Redraw the overlay from the current flow state and the last known mouse position. */
+  const refresh = () => {
+    if (!flow.active || !getTraceConfig().showOverlay) {
+      overlay.clear();
+      return;
+    }
+
+    const obj = self.obj;
+    const container = obj.stageRef?.container?.();
+    const insideImage = lastPointer && container && container.contains(lastPointer.target);
+    const { width, height } = imageSize();
+    const { gapPx, miterLimit } = getTraceConfig();
+    const view = flow.preview({
+      point: insideImage ? toInternal({ clientX: lastPointer.x, clientY: lastPointer.y }) : null,
+      polygons: getCandidates(),
+      width,
+      height,
+      pickRadiusImagePx: pickRadiusImagePx(),
+      gapPx,
+      miterLimit,
+    });
+
+    overlay.render({
+      stage: obj.stageRef,
+      view,
+      toCanvas: ([x, y]) => [obj.internalToCanvasX(x), obj.internalToCanvasY(y)],
+    });
+  };
+
+  const scheduleRefresh = () => {
+    if (frame !== null) return;
+    frame = window.requestAnimationFrame(() => {
+      frame = null;
+      if (flow.active) refresh();
+    });
   };
 
   const report = (event) => {
@@ -145,6 +188,13 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
         miterLimit,
       }),
     );
+    refresh();
+  };
+
+  /** Always on and cheap: remembers where the mouse is, so the preview is right the moment the flow starts. */
+  const onMouseMove = (ev) => {
+    lastPointer = { x: ev.clientX, y: ev.clientY, target: ev.target };
+    if (flow.active) scheduleRefresh();
   };
 
   const onMouseEvent = (ev) => {
@@ -198,6 +248,7 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
     ev.stopPropagation();
     ev.stopImmediatePropagation();
     report(flow.press(isComma ? PATH_MODE.SHORT : PATH_MODE.LONG));
+    refresh();
   };
 
   return {
@@ -205,11 +256,16 @@ export const TraceMixin = types.model("TraceContourMixin").actions((self) => {
       // The capture phase on `window` runs before Konva and before keymaster, which is what makes the takeover possible.
       window.addEventListener("keydown", onKeyDown, true);
       SWALLOWED_MOUSE_EVENTS.forEach((type) => window.addEventListener(type, onMouseEvent, true));
+      window.addEventListener("mousemove", onMouseMove, true);
     },
 
     beforeDestroy() {
       window.removeEventListener("keydown", onKeyDown, true);
       SWALLOWED_MOUSE_EVENTS.forEach((type) => window.removeEventListener(type, onMouseEvent, true));
+      window.removeEventListener("mousemove", onMouseMove, true);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+      overlay.destroy();
     },
 
     traceCancel() {

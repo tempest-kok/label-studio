@@ -8,7 +8,7 @@ When porting to another Label Studio, apply exactly these edits, then check "Wha
 
 | # | File | Feature | What changed | Branch |
 |---|------|---------|--------------|--------|
-| 1 | `web/libs/editor/src/tools/Polygon.js` | trace-contour | `import { TraceMixin }` + `TraceMixin` added as the last argument of `types.compose(...)`. Both lines are marked `// FORK`. | `feat/trace-contour` |
+| 1 | `web/libs/editor/src/tools/Polygon.js` | trace-contour (all steps up to the overlay) | `import { TraceMixin }` + `TraceMixin` added as the last argument of `types.compose(...)`. Both lines are marked `// FORK`. | `feat/trace-contour` |
 
 Find them again at any time: `grep -rn "FORK" web/libs/editor/src --include=*.js --include=*.jsx --include=*.ts`
 
@@ -20,5 +20,6 @@ Find them again at any time: `grep -rn "FORK" web/libs/editor/src --include=*.js
 - Image object (`tags/object/Image/Image.js`): `stageRef`, `stageWidth`, `zoomScale`, `naturalWidth`, `naturalHeight`, `isSideways`, `fixZoomedCoords`, `canvasToInternalX/Y`.
 - Regions: `annotation.regions`; polygon region fields `type === "polygonregion"`, `closed`, `hidden`, `parent`, `points[].x/y`.
 - Konva 8 (lockfile: 8.4.3): `stage.container()`, `stage.setPointersPositions(event)`, `stage.getPointerPosition()`. Clicks are taken over with capture-phase listeners on `window`, because a region's own `onClick` stops the click before it reaches the tool.
+- The overlay (`TraceOverlay.js`) adds one non-listening Konva layer to the image stage (`stage.add`, `layer.moveToTop`) and draws in canvas coordinates under the stage's own zoom (`stage.scaleX()`), the same way region layers do when the flag above is on. It touches no React component. Switch it off alone with `showOverlay: false`.
 - Hotkeys are plain `keydown` listeners (`event.code` Comma/Period, with `event.key` as a fallback), not keymaster.
 - Switch: `window.LS_FORK_TOOLS = { traceContour: { enabled: false } }` or `enabled` in `fork-tools/trace-contour/config.js`.

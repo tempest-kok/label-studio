@@ -22,6 +22,8 @@ export const TRACE_CONTOUR_DEFAULTS = {
   pickRadiusScreenPx: 12,
   // A press-release that moved by more than this many screen pixels is a drag, not a click.
   clickMovePx: 5,
+  // Draw the neighbour's vertices and the arc preview over the image. false = clicks and hotkeys only.
+  showOverlay: true,
   // Write what the tool is doing to the browser console (prefix "[trace-contour]").
   debug: true,
 };
