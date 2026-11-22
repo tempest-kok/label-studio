@@ -6,6 +6,7 @@ import ToolMixin from "../mixins/Tool";
 import { MultipleClicksDrawingTool } from "../mixins/DrawingTool";
 import { NodeViews } from "../components/Node/Node";
 import { observe } from "mobx";
+import { TraceMixin } from "../fork-tools/trace-contour/TraceMixin"; // FORK: trace-contour
 
 const _Tool = types
   .model("PolygonTool", {
@@ -147,6 +148,6 @@ const _Tool = types
     };
   });
 
-const Polygon = types.compose(_Tool.name, ToolMixin, BaseTool, MultipleClicksDrawingTool, _Tool);
+const Polygon = types.compose(_Tool.name, ToolMixin, BaseTool, MultipleClicksDrawingTool, _Tool, TraceMixin); // FORK: trace-contour
 
 export { Polygon };
